@@ -1,5 +1,8 @@
-﻿import express from 'express';
+import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import morgan from 'morgan';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import path from 'node:path';
@@ -10,13 +13,58 @@ import productRoutes from './routes/products.js';
 import orderRoutes from './routes/orders.js';
 import restockRoutes from './routes/restocks.js';
 import uploadRoutes from './routes/uploads.js';
+import categoryRoutes from './routes/categories.js';
+import couponRoutes from './routes/coupons.js';
+import favoriteRoutes from './routes/favorites.js';
+import supportRoutes from './routes/support.js';
+import ratingRoutes from './routes/ratings.js';
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 4000;
+const isProduction = process.env.NODE_ENV === 'production';
+const corsOrigins = (process.env.CORS_ORIGIN ?? '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+const allowAllOrigins = corsOrigins.includes('*');
+const localhostOrigin = /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/;
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
+app.set('trust proxy', 1);
+app.use(morgan(isProduction ? 'combined' : 'dev'));
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  }),
+);
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 200,
+    standardHeaders: true,
+    legacyHeaders: false,
+  }),
+);
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) {
+        return callback(null, true);
+      }
+      if (allowAllOrigins) {
+        return callback(null, true);
+      }
+      if (
+        corsOrigins.includes(origin) ||
+        (!isProduction && localhostOrigin.test(origin))
+      ) {
+        return callback(null, true);
+      }
+      return callback(new Error('Not allowed by CORS'));
+    },
+  }),
+);
 app.use(express.json());
 
 app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
@@ -27,16 +75,31 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/coupons', couponRoutes);
+app.use('/api/favorites', favoriteRoutes);
+app.use('/api/support', supportRoutes);
+app.use('/api/ratings', ratingRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/restocks', restockRoutes);
 app.use('/api/uploads', uploadRoutes);
 
-seedAdmin()
-  .then(seedProducts)
-  .catch((err) => console.error('Seed failed:', err));
+if (process.env.SEED_ON_STARTUP === 'true') {
+  seedAdmin()
+    .then(seedProducts)
+    .catch((err) => console.error('Seed failed:', err));
+}
 
 app.listen(port, () => {
   console.log(`API listening on port ${port}`);
+});
+
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  return res.status(500).json({ error: 'Internal server error.' });
 });
 
 async function seedAdmin() {

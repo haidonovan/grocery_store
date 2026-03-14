@@ -23,15 +23,25 @@ router.get('/me', requireAuth, async (req, res) => {
 });
 
 router.post('/', requireAuth, async (req, res) => {
-  const { shippingAddress, paymentMethod, lines } = req.body || {};
+  const { shippingAddress, paymentMethod, lines, couponCode } = req.body || {};
   if (!shippingAddress || !paymentMethod || !Array.isArray(lines) || lines.length === 0) {
     return res.status(400).json({ error: 'Invalid order payload.' });
+  }
+
+  let coupon = null;
+  if (couponCode) {
+    coupon = await prisma.coupon.findUnique({
+      where: { code: couponCode.toString().trim().toUpperCase() },
+    });
+    if (!coupon || !coupon.isActive || !isCouponUsable(coupon, req.user.email)) {
+      return res.status(400).json({ error: 'Invalid coupon.' });
+    }
   }
 
   const products = await prisma.product.findMany();
   const productMap = new Map(products.map((row) => [row.id, row]));
 
-  let total = 0;
+  let subtotal = 0;
   for (const line of lines) {
     const product = productMap.get(line.productId);
     if (!product || !product.isActive) {
@@ -40,8 +50,29 @@ router.post('/', requireAuth, async (req, res) => {
     if (product.stock < line.quantity) {
       return res.status(400).json({ error: 'Insufficient stock.' });
     }
-    total += product.price * line.quantity;
+    const now = new Date();
+    const start = product.discountStart ? new Date(product.discountStart) : null;
+    const end = product.discountEnd ? new Date(product.discountEnd) : null;
+    const isActive =
+      (product.discountPercent ?? 0) > 0 &&
+      (!start || start <= now) &&
+      (!end || end >= now);
+    const discountPercent = isActive
+      ? Number(product.discountPercent ?? 0) || 0
+      : 0;
+    const priceAfterDiscount = product.price * (1 - discountPercent / 100);
+    subtotal += priceAfterDiscount * line.quantity;
   }
+
+  let couponDiscount = 0;
+  if (coupon) {
+    if (coupon.type === 'percent') {
+      couponDiscount = subtotal * (coupon.value / 100);
+    } else {
+      couponDiscount = coupon.value;
+    }
+  }
+  const total = Math.max(0, subtotal - couponDiscount);
 
   const orderId = `ORD-${Date.now()}`;
 
@@ -54,18 +85,36 @@ router.post('/', requireAuth, async (req, res) => {
         paymentMethod,
         total,
         status: 'pending',
+        couponCode: coupon?.code ?? null,
+        couponType: coupon?.type ?? null,
+        couponValue: coupon?.value ?? null,
+        couponDiscount,
       },
     });
 
     for (const line of lines) {
       const product = productMap.get(line.productId);
+      const now = new Date();
+      const start = product.discountStart
+        ? new Date(product.discountStart)
+        : null;
+      const end = product.discountEnd ? new Date(product.discountEnd) : null;
+      const isActive =
+        (product.discountPercent ?? 0) > 0 &&
+        (!start || start <= now) &&
+        (!end || end >= now);
+      const discountPercent = isActive
+        ? Number(product.discountPercent ?? 0) || 0
+        : 0;
+      const priceAfterDiscount = product.price * (1 - discountPercent / 100);
       await tx.orderLine.create({
         data: {
           orderId,
           productId: product.id,
           productName: product.name,
           quantity: line.quantity,
-          unitPrice: product.price,
+          unitPrice: priceAfterDiscount,
+          discountPercent,
         },
       });
 
@@ -108,6 +157,26 @@ router.patch('/:id/status', requireAuth, requireRole('admin'), async (req, res) 
   return res.json(mapOrder(order));
 });
 
+router.patch('/:id/tracking', requireAuth, requireRole('admin'), async (req, res) => {
+  const { trackingNumber, trackingCarrier, trackingStatus } = req.body || {};
+  const existing = await prisma.order.findUnique({ where: { id: req.params.id } });
+  if (!existing) {
+    return res.status(404).json({ error: 'Order not found.' });
+  }
+
+  const order = await prisma.order.update({
+    where: { id: req.params.id },
+    data: {
+      trackingNumber: trackingNumber?.trim() || null,
+      trackingCarrier: trackingCarrier?.trim() || null,
+      trackingStatus: trackingStatus?.trim() || null,
+      trackingUpdatedAt: new Date(),
+    },
+    include: { customer: true },
+  });
+  return res.json(mapOrder(order));
+});
+
 router.get('/:id/lines', requireAuth, async (req, res) => {
   const order = await prisma.order.findUnique({
     where: { id: req.params.id },
@@ -130,6 +199,7 @@ router.get('/:id/lines', requireAuth, async (req, res) => {
       productName: line.productName,
       quantity: line.quantity,
       unitPrice: line.unitPrice,
+      discountPercent: line.discountPercent ?? 0,
       subtotal: line.unitPrice * line.quantity,
     }))
   );
@@ -148,7 +218,29 @@ function mapOrder(row) {
     total: row.total,
     status: row.status,
     createdAt: row.createdAt,
+    trackingNumber: row.trackingNumber ?? null,
+    trackingCarrier: row.trackingCarrier ?? null,
+    trackingStatus: row.trackingStatus ?? null,
+    trackingUpdatedAt: row.trackingUpdatedAt ?? null,
+    couponCode: row.couponCode ?? null,
+    couponType: row.couponType ?? null,
+    couponValue: row.couponValue ?? null,
+    couponDiscount: row.couponDiscount ?? null,
   };
+}
+
+function isCouponUsable(coupon, email) {
+  const now = new Date();
+  if (coupon.startsAt && new Date(coupon.startsAt) > now) {
+    return false;
+  }
+  if (coupon.endsAt && new Date(coupon.endsAt) < now) {
+    return false;
+  }
+  if (coupon.audience === 'user' && coupon.userEmail !== email) {
+    return false;
+  }
+  return true;
 }
 
 export default router;

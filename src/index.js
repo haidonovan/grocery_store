@@ -18,6 +18,7 @@ import couponRoutes from './routes/coupons.js';
 import favoriteRoutes from './routes/favorites.js';
 import supportRoutes from './routes/support.js';
 import ratingRoutes from './routes/ratings.js';
+import commentRoutes from './routes/comments.js';
 
 dotenv.config();
 
@@ -80,6 +81,7 @@ app.use('/api/coupons', couponRoutes);
 app.use('/api/favorites', favoriteRoutes);
 app.use('/api/support', supportRoutes);
 app.use('/api/ratings', ratingRoutes);
+app.use('/api/comments', commentRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/restocks', restockRoutes);
 app.use('/api/uploads', uploadRoutes);

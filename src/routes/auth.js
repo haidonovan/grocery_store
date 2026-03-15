@@ -4,6 +4,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 
 import prisma from '../db.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -98,6 +99,22 @@ router.post('/login', authLimiter, async (req, res) => {
     return res.json({ token, user: payload });
   } catch (err) {
     console.error('Login failed:', err);
+    return res.status(500).json({ error: 'Internal server error.' });
+  }
+});
+
+router.get('/me', requireAuth, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, email: true, role: true },
+    });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+    return res.json({ user });
+  } catch (err) {
+    console.error('Session check failed:', err);
     return res.status(500).json({ error: 'Internal server error.' });
   }
 });

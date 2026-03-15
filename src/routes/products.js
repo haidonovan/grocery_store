@@ -1,4 +1,5 @@
-﻿import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
+import { Router } from 'express';
 
 import prisma from '../db.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
@@ -63,6 +64,95 @@ router.post('/', requireAuth, requireRole('admin'), async (req, res) => {
   });
 
   return res.status(201).json(mapProduct(row));
+});
+
+router.post('/import', requireAuth, requireRole('admin'), async (req, res) => {
+  const csv = req.body?.csv?.toString() ?? '';
+  if (!csv.trim()) {
+    return res.status(400).json({ error: 'CSV content is required.' });
+  }
+
+  let parsedRows;
+  try {
+    parsedRows = parseCsv(csv);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  if (parsedRows.length === 0) {
+    return res.status(400).json({ error: 'No product rows were found.' });
+  }
+
+  const normalizedRows = [];
+
+  try {
+    for (let index = 0; index < parsedRows.length; index += 1) {
+      const row = parsedRows[index];
+      const line = index + 2;
+
+      const name = row.name?.trim();
+      const category = row.category?.trim();
+      const description = row.description?.trim();
+      const imageUrl = row.imageUrl?.trim();
+
+      if (!name || !category || !description || !imageUrl) {
+        return res.status(400).json({
+          error: `Row ${line} is missing one of the required fields: name, category, description, imageUrl.`,
+        });
+      }
+
+      const price = Number(row.price);
+      const stock = Number(row.stock);
+      const discountPercent = Number(row.discountPercent ?? 0);
+
+      if (!Number.isFinite(price) || price < 0) {
+        return res.status(400).json({ error: `Row ${line} has an invalid price.` });
+      }
+
+      if (!Number.isFinite(stock) || stock < 0) {
+        return res.status(400).json({ error: `Row ${line} has an invalid stock value.` });
+      }
+
+      if (!Number.isFinite(discountPercent) || discountPercent < 0) {
+        return res.status(400).json({
+          error: `Row ${line} has an invalid discountPercent value.`,
+        });
+      }
+
+      normalizedRows.push({
+        id: row.id?.trim() || `p_${randomUUID()}`,
+        name,
+        category,
+        description,
+        price,
+        stock: Math.trunc(stock),
+        imageUrl,
+        isActive: parseOptionalBoolean(row.isActive, true),
+        discountPercent: Math.max(0, Math.min(90, discountPercent)),
+        discountStart: parseOptionalDate(row.discountStart, line, 'discountStart'),
+        discountEnd: parseOptionalDate(row.discountEnd, line, 'discountEnd'),
+      });
+    }
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  try {
+    await prisma.$transaction(
+      normalizedRows.map((row) =>
+        prisma.product.create({
+          data: row,
+        }),
+      ),
+    );
+  } catch (error) {
+    const message = error?.code === 'P2002'
+      ? 'A product ID in the CSV already exists.'
+      : 'Failed to import products.';
+    return res.status(400).json({ error: message });
+  }
+
+  return res.status(201).json({ importedCount: normalizedRows.length });
 });
 
 router.put('/:id', requireAuth, requireRole('admin'), async (req, res) => {
@@ -185,6 +275,96 @@ function mapProduct(row) {
     stock: row.stock,
     isActive: row.isActive,
   };
+}
+
+function parseOptionalDate(value, line, fieldName) {
+  if (value == null || value.toString().trim() === '') {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Row ${line} has an invalid ${fieldName} date.`);
+  }
+  return parsed;
+}
+
+function parseOptionalBoolean(value, fallback) {
+  if (value == null || value.toString().trim() === '') {
+    return fallback;
+  }
+
+  const normalized = value.toString().trim().toLowerCase();
+  if (['true', '1', 'yes', 'y'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'n'].includes(normalized)) {
+    return false;
+  }
+  return fallback;
+}
+
+function parseCsv(content) {
+  const rows = [];
+  let currentRow = [];
+  let currentValue = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < content.length; index += 1) {
+    const char = content[index];
+    const next = content[index + 1];
+
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        currentValue += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === ',' && !inQuotes) {
+      currentRow.push(currentValue);
+      currentValue = '';
+      continue;
+    }
+
+    if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && next === '\n') {
+        index += 1;
+      }
+      currentRow.push(currentValue);
+      if (currentRow.some((value) => value.trim().length > 0)) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+      currentValue = '';
+      continue;
+    }
+
+    currentValue += char;
+  }
+
+  currentRow.push(currentValue);
+  if (currentRow.some((value) => value.trim().length > 0)) {
+    rows.push(currentRow);
+  }
+
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const headers = rows[0].map((value) => value.trim());
+  return rows.slice(1).map((row) => {
+    const record = {};
+    headers.forEach((header, index) => {
+      if (header) {
+        record[header] = row[index]?.trim() ?? '';
+      }
+    });
+    return record;
+  });
 }
 
 export default router;

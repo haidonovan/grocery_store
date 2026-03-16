@@ -418,7 +418,10 @@ function parseCsv(content) {
     return [];
   }
 
-  const headers = rows[0].map((value) => value.trim());
+  const headers = rows[0].map((value, index) => {
+    const cleaned = value.trim();
+    return index == 0 ? cleaned.replace(/^\\uFEFF/, '') : cleaned;
+  });
   return rows.slice(1).map((row) => {
     const record = {};
     headers.forEach((header, index) => {
@@ -431,3 +434,4 @@ function parseCsv(content) {
 }
 
 export default router;
+

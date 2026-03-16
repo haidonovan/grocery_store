@@ -44,6 +44,7 @@ model User {
   supportTickets SupportTicket[]
   supportMessages SupportTicketMessage[]
   comments     ProductComment[]
+  couponRedemptions CouponRedemption[]
 }
 
 model Product {
@@ -87,6 +88,7 @@ model Order {
   couponDiscount  Float?
   customer        User         @relation(fields: [customerId], references: [id])
   lines           OrderLine[]
+  couponRedemption CouponRedemption?
 }
 
 model OrderLine {
@@ -186,4 +188,18 @@ model Coupon {
   endsAt    DateTime?
   userEmail String?
   createdAt DateTime   @default(now())
+  couponRedemptions CouponRedemption[]
+}
+
+model CouponRedemption {
+  id        Int      @id @default(autoincrement())
+  couponId  Int
+  userId    Int
+  orderId   String   @unique
+  usedAt    DateTime @default(now())
+  coupon    Coupon   @relation(fields: [couponId], references: [id])
+  user      User     @relation(fields: [userId], references: [id])
+  order     Order    @relation(fields: [orderId], references: [id])
+
+  @@unique([couponId, userId])
 }

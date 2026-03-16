@@ -135,6 +135,20 @@ router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
   if (!existing) {
     return res.status(404).json({ error: 'Coupon not found.' });
   }
+  const redemptionCount = await prisma.couponRedemption.count({
+    where: { couponId: id },
+  });
+  if (redemptionCount > 0) {
+    const row = await prisma.coupon.update({
+      where: { id },
+      data: { isActive: false },
+    });
+    return res.json({
+      archived: true,
+      coupon: row,
+      message: 'Coupon has already been used and was deactivated instead of deleted.',
+    });
+  }
   await prisma.coupon.delete({ where: { id } });
   return res.status(204).send();
 });
@@ -144,6 +158,9 @@ router.get('/active', requireAuth, async (req, res) => {
   const rows = await prisma.coupon.findMany({
     where: {
       isActive: true,
+      couponRedemptions: {
+        none: { userId: req.user.id },
+      },
       OR: [
         { startsAt: null },
         { startsAt: { lte: now } },

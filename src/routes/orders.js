@@ -36,9 +36,26 @@ router.post('/', requireAuth, async (req, res) => {
     if (!coupon || !coupon.isActive || !isCouponUsable(coupon, req.user.email)) {
       return res.status(400).json({ error: 'Invalid coupon.' });
     }
+
+    const existingRedemption = await prisma.couponRedemption.findUnique({
+      where: {
+        couponId_userId: {
+          couponId: coupon.id,
+          userId: req.user.id,
+        },
+      },
+    });
+    if (existingRedemption) {
+      return res.status(400).json({
+        error: 'You have already used this coupon.',
+      });
+    }
   }
 
-  const products = await prisma.product.findMany();
+  const productIds = [...new Set(lines.map((line) => line.productId))];
+  const products = await prisma.product.findMany({
+    where: { id: { in: productIds } },
+  });
   const productMap = new Map(products.map((row) => [row.id, row]));
 
   let subtotal = 0;
@@ -76,8 +93,49 @@ router.post('/', requireAuth, async (req, res) => {
 
   const orderId = `ORD-${Date.now()}`;
 
-  await prisma.$transaction(async (tx) => {
-    await tx.order.create({
+  const orderLineData = [];
+  const stockUpdates = [];
+
+  for (const line of lines) {
+    const product = productMap.get(line.productId);
+    const now = new Date();
+    const start = product.discountStart
+      ? new Date(product.discountStart)
+      : null;
+    const end = product.discountEnd ? new Date(product.discountEnd) : null;
+    const isActive =
+      (product.discountPercent ?? 0) > 0 &&
+      (!start || start <= now) &&
+      (!end || end >= now);
+    const discountPercent = isActive
+      ? Number(product.discountPercent ?? 0) || 0
+      : 0;
+    const priceAfterDiscount = product.price * (1 - discountPercent / 100);
+
+    orderLineData.push({
+      orderId,
+      productId: product.id,
+      productName: product.name,
+      quantity: line.quantity,
+      unitPrice: priceAfterDiscount,
+      discountPercent,
+    });
+
+    const nextStock = product.stock - line.quantity;
+    stockUpdates.push(
+      prisma.product.update({
+        where: { id: product.id },
+        data: { stock: nextStock },
+      })
+    );
+    productMap.set(product.id, {
+      ...product,
+      stock: nextStock,
+    });
+  }
+
+  const operations = [
+    prisma.order.create({
       data: {
         id: orderId,
         customerId: req.user.id,
@@ -90,44 +148,32 @@ router.post('/', requireAuth, async (req, res) => {
         couponValue: coupon?.value ?? null,
         couponDiscount,
       },
-    });
+    }),
+    ...(coupon
+      ? [
+          prisma.couponRedemption.create({
+            data: {
+              couponId: coupon.id,
+              userId: req.user.id,
+              orderId,
+            },
+          }),
+        ]
+      : []),
+    prisma.orderLine.createMany({
+      data: orderLineData,
+    }),
+    ...stockUpdates,
+  ];
 
-    for (const line of lines) {
-      const product = productMap.get(line.productId);
-      const now = new Date();
-      const start = product.discountStart
-        ? new Date(product.discountStart)
-        : null;
-      const end = product.discountEnd ? new Date(product.discountEnd) : null;
-      const isActive =
-        (product.discountPercent ?? 0) > 0 &&
-        (!start || start <= now) &&
-        (!end || end >= now);
-      const discountPercent = isActive
-        ? Number(product.discountPercent ?? 0) || 0
-        : 0;
-      const priceAfterDiscount = product.price * (1 - discountPercent / 100);
-      await tx.orderLine.create({
-        data: {
-          orderId,
-          productId: product.id,
-          productName: product.name,
-          quantity: line.quantity,
-          unitPrice: priceAfterDiscount,
-          discountPercent,
-        },
-      });
-
-      await tx.product.update({
-        where: { id: product.id },
-        data: { stock: product.stock - line.quantity },
-      });
-      productMap.set(product.id, {
-        ...product,
-        stock: product.stock - line.quantity,
-      });
+  try {
+    await prisma.$transaction(operations);
+  } catch (error) {
+    if (error?.code === 'P2002' && coupon) {
+      return res.status(400).json({ error: 'You have already used this coupon.' });
     }
-  });
+    throw error;
+  }
 
   const order = await prisma.order.findUnique({
     where: { id: orderId },

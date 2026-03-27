@@ -20,14 +20,26 @@ Set:
 - `CLOUDINARY_API_SECRET`
 - `CLOUDINARY_FOLDER` (optional)
 
-### 3. Create tables
+### 3. Configure ABA PayWay sandbox
+
+Set:
+- `PAYWAY_MERCHANT_ID`
+- `PAYWAY_PUBLIC_KEY`
+- `PAYWAY_SANDBOX=true`
+- `SERVER_PUBLIC_URL` or `PAYWAY_CALLBACK_URL` to a public HTTPS endpoint that ABA can reach
+
+Notes:
+- ABA sandbox requires your server domain or outbound IP to be whitelisted, otherwise PayWay returns code `6` (`wrong domain`).
+- The Flutter app should call your backend at `/api/payway/*`; your backend then calls ABA.
+
+### 4. Create tables
 
 ```bash
 npx prisma migrate dev --name init
 npx prisma generate
 ```
 
-### 4. Run API
+### 5. Run API
 
 ```bash
 npm run dev

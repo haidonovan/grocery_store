@@ -2,28 +2,54 @@ import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 
 import prisma from '../db.js';
+import {
+  getFallbackProductById,
+  getFallbackProducts,
+  isDatabaseUnavailable,
+} from '../dev_catalog.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 
-router.get('/', async (req, res) => {
-  const { active } = req.query;
-  const includeInactive = active === 'false';
+router.get('/', async (req, res, next) => {
+  try {
+    const { active } = req.query;
+    const includeInactive = active === 'false';
 
-  const rows = await prisma.product.findMany({
-    where: includeInactive ? undefined : { isActive: true },
-    orderBy: { createdAt: 'desc' },
-  });
+    const rows = await prisma.product.findMany({
+      where: includeInactive ? undefined : { isActive: true },
+      orderBy: { createdAt: 'desc' },
+    });
 
-  return res.json(rows.map(mapProduct));
+    return res.json(rows.map(mapProduct));
+  } catch (error) {
+    if (isDatabaseUnavailable(error)) {
+      const includeInactive = req.query.active === 'false';
+      return res.json(
+        getFallbackProducts({ includeInactive }).map(mapProduct),
+      );
+    }
+    return next(error);
+  }
 });
 
-router.get('/:id', async (req, res) => {
-  const row = await prisma.product.findUnique({ where: { id: req.params.id } });
-  if (!row) {
-    return res.status(404).json({ error: 'Product not found.' });
+router.get('/:id', async (req, res, next) => {
+  try {
+    const row = await prisma.product.findUnique({ where: { id: req.params.id } });
+    if (!row) {
+      return res.status(404).json({ error: 'Product not found.' });
+    }
+    return res.json(mapProduct(row));
+  } catch (error) {
+    if (isDatabaseUnavailable(error)) {
+      const row = getFallbackProductById(req.params.id);
+      if (!row) {
+        return res.status(404).json({ error: 'Product not found.' });
+      }
+      return res.json(mapProduct(row));
+    }
+    return next(error);
   }
-  return res.json(mapProduct(row));
 });
 
 router.post('/', requireAuth, requireRole('admin'), async (req, res) => {

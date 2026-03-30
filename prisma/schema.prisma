@@ -32,6 +32,13 @@ enum CouponAudience {
   user
 }
 
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  expired
+}
+
 model User {
   id           Int      @id @default(autoincrement())
   email        String   @unique
@@ -83,6 +90,19 @@ model Order {
   paymentMethod   String
   total           Float
   status          OrderStatus  @default(pending)
+  tranId          String?      @unique
+  paymentGateway  String?
+  paymentStatus   PaymentStatus @default(pending)
+  paymentAmount   Float?
+  paymentCurrency String?
+  paymentExpiresAt DateTime?
+  paymentPaidAt   DateTime?
+  paymentVerifiedAt DateTime?
+  paymentLastCheckedAt DateTime?
+  paymentCallbackReceivedAt DateTime?
+  paymentCallbackStatus String?
+  paymentApprovalCode String?
+  paymentFailureReason String?
   createdAt       DateTime     @default(now())
   trackingNumber  String?
   trackingCarrier String?

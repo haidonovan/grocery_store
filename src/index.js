@@ -20,6 +20,7 @@ import supportRoutes from './routes/support.js';
 import ratingRoutes from './routes/ratings.js';
 import commentRoutes from './routes/comments.js';
 import paywayRoutes from './routes/payway.js';
+import paymentRoutes from './routes/payments.js';
 
 dotenv.config();
 
@@ -92,6 +93,7 @@ app.use('/api/support', supportRoutes);
 app.use('/api/ratings', ratingRoutes);
 app.use('/api/comments', commentRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/restocks', restockRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/payway', paywayRoutes);
